@@ -1,116 +1,99 @@
-# Structure of this project
+Private Perps (Anchor + Arcium)
 
-This project is structured pretty similarly to how a regular Solana Anchor project is structured. The main difference lies in there being two places to write code here:
+Private Perps is a Solana program built using Anchor and Arcium.
+It shows how confidential order flow can work using encrypted off-chain computation.
 
-- The `programs` dir like usual Anchor programs
-- The `encrypted-ixs` dir for confidential computing instructions
+The main logic of the program runs on-chain with Anchor.
+Sensitive calculations, such as order evaluation, are handled off-chain using Arcium’s confidential computing.
+After Arcium processes the encrypted data, the results are verified and applied back on-chain.
 
-When working with plaintext data, we can edit it inside our program as normal. When working with confidential data though, state transitions take place off-chain using the Arcium network as a co-processor. For this, we then always need two instructions in our program: one that gets called to initialize a confidential computation, and one that gets called when the computation is done and supplies the resulting data. Additionally, since the types and operations in a Solana program and in a confidential computing environment are a bit different, we define the operations themselves in the `encrypted-ixs` dir using our Rust-based framework called Arcis. To link all of this together, we provide a few macros that take care of ensuring the correct accounts and data are passed for the specific initialization and callback functions:
+Tech Stack
 
-```rust
-// encrypted-ixs/add_together.rs
+Anchor 0.32.x (Solana program framework)
+Arcium 0.3.x (confidential computing co-processor)
+Rust 1.75+ (2021 edition)
+TypeScript tests (Mocha and Chai)
 
-use arcis_imports::*;
+Project Structure
 
-#[encrypted]
-mod circuits {
-    use arcis_imports::*;
+programs/Perpetual – Anchor program module (private_perps)
+encrypted-ixs – Arcium circuits for confidential instructions
+artifacts – localnet configs, generated accounts, and Docker setup for Arcium
+build – compiled circuits and TypeScript bindings
+tests – test files written in TypeScript
+Anchor.toml – Anchor configuration file
+Arcium.toml – Arcium configuration file
 
-    pub struct InputValues {
-        v1: u8,
-        v2: u8,
-    }
 
-    #[instruction]
-    pub fn add_together(input_ctxt: Enc<Shared, InputValues>) -> Enc<Shared, u16> {
-        let input = input_ctxt.to_arcis();
-        let sum = input.v1 as u16 + input.v2 as u16;
-        input_ctxt.owner.from_arcis(sum)
-    }
-}
+Run:
 
-// programs/my_program/src/lib.rs
+yarn / npm install
+Configure Program ID
 
-use anchor_lang::prelude::*;
-use arcium_anchor::prelude::*;
+In Anchor.toml, set your program ID under [programs.localnet]:
 
-declare_id!("<some ID>");
+[programs.localnet]
+hi = "HVFgsYknF4UZuTTeHBpQFZYGvHjYK347mtxSfhseJ2ir"
 
-#[arcium_program]
-pub mod my_program {
-    use super::*;
 
-    pub fn init_add_together_comp_def(ctx: Context<InitAddTogetherCompDef>) -> Result<()> {
-        init_comp_def(ctx.accounts, true, 0, None, None)?;
-        Ok(())
-    }
+The module name is private_perps and its IDL name is PrivatePerps.
+Tests import it from target/types/private_perps.
 
-    pub fn add_together(
-        ctx: Context<AddTogether>,
-        computation_offset: u64,
-        ciphertext_0: [u8; 32],
-        ciphertext_1: [u8; 32],
-        pub_key: [u8; 32],
-        nonce: u128,
-    ) -> Result<()> {
-        let args = vec![
-            Argument::ArcisPubkey(pub_key),
-            Argument::PlaintextU128(nonce),
-            Argument::EncryptedU8(ciphertext_0),
-            Argument::EncryptedU8(ciphertext_1),
-        ];
-        ctx.accounts.sign_pda_account.bump = ctx.bumps.sign_pda_account;
-        queue_computation(
-            ctx.accounts,
-            computation_offset,
-            args,
-            None,
-            vec![AddTogetherCallback::callback_ix(&[])],
-        )?;
-        Ok(())
-    }
+Build
 
-    #[arcium_callback(encrypted_ix = "add_together")]
-    pub fn add_together_callback(
-        ctx: Context<AddTogetherCallback>,
-        output: ComputationOutputs<AddTogetherOutput>,
-    ) -> Result<()> {
-        let o = match output {
-            ComputationOutputs::Success(AddTogetherOutput { field_0: o }) => o,
-            _ => return Err(ErrorCode::AbortedComputation.into()),
-        };
+Build the Anchor program:
+anchor build
+arcium build
 
-        emit!(SumEvent {
-            sum: o.ciphertexts[0],
-            nonce: o.nonce.to_le_bytes(),
-        });
-        Ok(())
-    }
-}
+Build the Arcium circuits:
+cargo build -p encrypted-ixs --release
 
-#[queue_computation_accounts("add_together", payer)]
-#[derive(Accounts)]
-#[instruction(computation_offset: u64)]
-pub struct AddTogether<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    // ... other required accounts
-}
 
-#[callback_accounts("add_together", payer)]
-#[derive(Accounts)]
-pub struct AddTogetherCallback<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    // ... other required accounts
-    pub some_extra_acc: AccountInfo<'info>,
-}
+This compiles the encrypted instructions and places the results in the build/ folder.
+You will find files such as:
 
-#[init_computation_definition_accounts("add_together", payer)]
-#[derive(Accounts)]
-pub struct InitAddTogetherCompDef<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-    // ... other required accounts
-}
-```
+open_position_v1.ts
+
+close_position_v1.ts
+
+.arcis files
+
+Deploy to Localnet
+
+Start a local Solana validator using solana-test-validator or anchor localnet, then deploy:
+
+anchor deploy
+
+Run Tests
+
+Tests are written with Mocha and Chai.
+Run them using:
+
+yarn test
+or
+anchor test
+
+Tests cover:
+
+Market initialization (initialize_market)
+User account creation and collateral deposit (deposit)
+Submitting encrypted orders (submit_encrypted_order)
+Applying encrypted computation results (apply_encrypted_result)
+Key Accounts
+
+Market – holds market data such as authority, fees, and open interest
+UserAccount – stores user information and collateral
+ComputationRequest – stores Arcium computation metadata
+Position – holds user’s position size and average price
+Encrypted Order Flow
+
+The client encrypts order data and sends it to Arcium for processing.
+The program records a ComputationRequest with a circuit offset.
+When Arcium completes, the client calls apply_encrypted_result with the results.
+The program verifies and updates the on-chain state.
+
+
+Make sure Docker is running before starting the Arcium localnet.
+
+
+
